@@ -54,14 +54,32 @@ export async function POST(req: Request) {
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         function send(event: unknown) {
-          controller.enqueue(encoder.encode(JSON.stringify(event) + "\n"));
+          try {
+            controller.enqueue(encoder.encode(JSON.stringify(event) + "\n"));
+          } catch (e) {
+            // Stream might be closed
+          }
         }
 
         send({ type: "status", status: "generating_story" });
 
+        // Check if client is still connected
+        let isAborted = false;
+        req.signal.addEventListener("abort", () => {
+          console.log("!!! Client disconnected. Stopping background generation.");
+          isAborted = true;
+        });
+
         try {
-          // Switch to the 'Lite' model which usually has higher free tier limits
-          const modelName = "gemini-flash-lite-latest";
+          // 0. Safety Buffer: Wait 5s before starting anything
+          console.log("0. Safety Buffer (5s)...");
+          const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+          await sleep(5000);
+          
+          if (isAborted) return;
+
+          // Use 'gemini-flash-latest' (1.5 Flash) which reached Page 7 earlier
+          const modelName = "gemini-flash-latest";
           console.log(`Using model: ${modelName}`);
           const model = google(modelName); 
           
@@ -69,53 +87,75 @@ export async function POST(req: Request) {
             ? `Create a delightful random children's story topic for ages ${ageRange}.`
             : `Create a children's story about: ${subject}`;
 
-          console.log("Topic used:", topic);
+          if (isAborted) return;
 
-          // 1. Generate a title
+          // 1. Generate a title with a built-in retry
           console.log("1. Generating Title...");
-          const { object: titleObject } = await generateObject({
-            model,
-            schema: titleSchema,
-            prompt: `Propose a short children's book title for: ${topic}.`,
-          });
-          const { title } = titleObject as { title: string };
-          console.log("2. Title Generated:", title);
+          let title = "My Story";
+          try {
+            const { object: titleObject } = await generateObject({
+              model,
+              schema: titleSchema,
+              prompt: `Propose a short, catchy children's book title for: ${topic}.`,
+            });
+            title = (titleObject as any).title;
+          } catch (e) {
+            console.log("Title generation failed, using default.");
+          }
+          
+          console.log("2. Title Ready:", title);
           send({ type: "cover", title });
 
-          // Helper to wait between requests
-          const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-          // 2. Sequential generation with a longer rest for the 5 RPM limit
+          // 2. Sequential generation with a long rest
           console.log(`3. Starting Sequential Generation for ${pages} pages...`);
           for (let pageNumber = 1; pageNumber <= pages; pageNumber++) {
-            // Wait 12 seconds to perfectly stay under a 5 requests per minute limit
-            // (60 seconds / 5 = 12 seconds per request)
-            console.log(`- Resting for 12s to respect API limits...`);
-            await sleep(12000);
+            if (isAborted) break;
+
+            // Wait 15 seconds between pages to be EXTREMELY safe for Free Tier (4 RPM)
+            console.log(`- Resting for 15s to be safe...`);
+            await sleep(15000);
             
+            if (isAborted) break;
+
             console.log(`- Generating Page ${pageNumber}...`);
-            const { object: pageObject } = await generateObject({
-              model,
-              schema: pageSchema,
-              prompt: `You are a children's storyteller. Write page ${pageNumber} of ${pages} for a book about ${topic}. 
-              Write 1-3 simple sentences in 'text' and a concise 'imagePrompt'.
-              Return JSON with pageNumber, text, imagePrompt.`,
-            });
-            const page = pageObject as StoryPage;
-            const safePage = { ...page, pageNumber } as StoryPage;
-            send({ type: "page_text", page: safePage });
-            send({ type: "progress", done: pageNumber, total: pages });
-            
-            // Placeholder image
-            send({ type: "page_image", pageNumber, imageUrl: `https://placehold.co/1024x1024/sky/white?text=Page+${pageNumber}` });
+            try {
+              const { object: pageObject } = await generateObject({
+                model,
+                schema: pageSchema,
+                prompt: `You are a children's storyteller. Write page ${pageNumber} of ${pages} for a book about ${topic}. 
+                Write 1-3 simple sentences in 'text' and a concise 'imagePrompt'.
+                Return JSON with pageNumber, text, imagePrompt.`,
+              });
+              
+              const page = pageObject as StoryPage;
+              const safePage = { ...page, pageNumber } as StoryPage;
+              
+              // Generate a real image using Pollinations
+              const cleanStyle = style.replace(/[^a-zA-Z0-9 ]/g, "");
+              const encodedPrompt = encodeURIComponent(`${safePage.imagePrompt}. Style: ${cleanStyle}. Wholesome children's book illustration.`);
+              const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true&seed=${Math.floor(Math.random() * 1000000)}`;
+              
+              console.log(`- Page ${pageNumber} ready.`);
+              send({ type: "page_text", page: safePage });
+              send({ type: "progress", done: pageNumber, total: pages });
+              send({ type: "page_image", pageNumber, imageUrl });
+            } catch (pageErr: any) {
+              console.error(`- Page ${pageNumber} failed:`, pageErr?.message);
+              // If a page fails, we try to keep going instead of crashing the whole thing
+              send({ type: "page_image_error", pageNumber, error: "Page took too long" });
+            }
           }
 
-          console.log("4. All pages finished.");
+          if (!isAborted) {
+            console.log("4. Finished.");
             send({ type: "done" });
-            controller.close();
+          }
+          controller.close();
         } catch (e: any) {
-          console.error("!!! GEMINI ERROR:", e?.message || e);
-          send({ type: "error", error: e?.message || "Gemini Error" });
+          if (!isAborted) {
+            console.error("!!! GEMINI ERROR:", e?.message || e);
+            send({ type: "error", error: e?.message || "Gemini Error" });
+          }
           controller.close();
         }
       },
