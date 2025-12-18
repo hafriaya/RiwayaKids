@@ -12,7 +12,7 @@ export default function ReadPage() {
 
   const subject = searchParams.get("subject") || "";
   const random = searchParams.get("random") === "true";
-  const pagesParam = parseInt(searchParams.get("pages") || "10", 10);
+  const pagesParam = parseInt(searchParams.get("pages") || "5", 10);
   const ageRange = searchParams.get("ageRange") || "4-7";
 
   const [isLoading, setIsLoading] = useState(true);

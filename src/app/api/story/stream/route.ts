@@ -8,7 +8,7 @@ import type { StoryPage } from "@/lib/types";
 const requestSchema = z.object({
   subject: z.string().optional(),
   random: z.boolean().optional(),
-  pages: z.number().min(10).max(16).optional(),
+  pages: z.number().min(5).max(10).optional(),
   ageRange: z.string().optional(),
   style: z.string().optional(),
 });
@@ -43,7 +43,7 @@ export async function POST(req: Request) {
     const {
       subject,
       random = false,
-      pages = 10,
+      pages = 5,
       ageRange = "4-7",
       style = "bright, colorful, watercolor children's book style, soft lighting",
     } = parsed.data;

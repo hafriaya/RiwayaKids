@@ -23,7 +23,7 @@ export default function Home() {
     const query = new URLSearchParams({
       subject,
       random: String(isRandom),
-      pages: String(10),
+      pages: String(5),
       ageRange: "4-7",
     }).toString();
     router.push(`/read?${query}`);
