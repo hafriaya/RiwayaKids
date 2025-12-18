@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { generateObject } from "ai";
-import { openai as openaiProvider } from "@ai-sdk/openai";
+import { google } from "@ai-sdk/google";
 import OpenAI from "openai";
 import type { StoryPage } from "@/lib/types";
 
@@ -21,8 +21,9 @@ const pageSchema = z.object({
 });
 
 export async function POST(req: Request) {
-  if (!process.env.OPENAI_API_KEY) {
-    return NextResponse.json({ error: "Missing OPENAI_API_KEY" }, { status: 500 });
+  // Check for Gemini Key
+  if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
+    return NextResponse.json({ error: "Missing GOOGLE_GENERATIVE_AI_API_KEY" }, { status: 500 });
   }
 
   const encoder = new TextEncoder();
@@ -47,10 +48,8 @@ export async function POST(req: Request) {
       style = "bright, colorful, watercolor children's book style, soft lighting",
     } = parsed.data;
 
-    console.log("--- New Story Request ---");
+    console.log("--- New Story Request (Gemini) ---");
     console.log("Subject:", subject);
-    console.log("Random:", random);
-    console.log("Pages:", pages);
 
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
@@ -61,89 +60,62 @@ export async function POST(req: Request) {
         send({ type: "status", status: "generating_story" });
 
         try {
-          console.log("1. Starting Title Generation...");
-          const model = openaiProvider("gpt-4o-mini");
-          const topic = random
-            ? `Create a random delightful children's story topic suitable for ages ${ageRange}.`
+          // Switch to the 'Lite' model which usually has higher free tier limits
+          const modelName = "gemini-flash-lite-latest";
+          console.log(`Using model: ${modelName}`);
+          const model = google(modelName); 
+          
+          const topic = random || !subject
+            ? `Create a delightful random children's story topic for ages ${ageRange}.`
             : `Create a children's story about: ${subject}`;
 
-          // Generate a title immediately for the cover
+          console.log("Topic used:", topic);
+
+          // 1. Generate a title
+          console.log("1. Generating Title...");
           const { object: titleObject } = await generateObject({
             model,
             schema: titleSchema,
-            prompt:
-              `Propose a short, catchy children's book title (max 8 words) for this topic: ${topic}. ` +
-              `Return only JSON with a 'title' field.`,
-            temperature: 0.7,
+            prompt: `Propose a short children's book title for: ${topic}.`,
           });
           const { title } = titleObject as { title: string };
           console.log("2. Title Generated:", title);
           send({ type: "cover", title });
 
-          const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+          // Helper to wait between requests
+          const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-          // Generate each page sequentially so text streams quickly
-          let completedTexts = 0;
-          let pendingImages = 0;
-          console.log(`3. Starting Loop for ${pages} pages...`);
+          // 2. Sequential generation with a longer rest for the 5 RPM limit
+          console.log(`3. Starting Sequential Generation for ${pages} pages...`);
           for (let pageNumber = 1; pageNumber <= pages; pageNumber++) {
-            console.log(`- Generating Page ${pageNumber} Text...`);
+            // Wait 12 seconds to perfectly stay under a 5 requests per minute limit
+            // (60 seconds / 5 = 12 seconds per request)
+            console.log(`- Resting for 12s to respect API limits...`);
+            await sleep(12000);
+            
+            console.log(`- Generating Page ${pageNumber}...`);
             const { object: pageObject } = await generateObject({
               model,
               schema: pageSchema,
-              prompt:
-                `You are writing page ${pageNumber} of ${pages} for a children's book (ages ${ageRange}). ` +
-                `Topic: ${topic}. Style for illustrations: ${style}. ` +
-                `Write 1-3 simple sentences in 'text' that advances the story and a concise 'imagePrompt'. ` +
-                `Return JSON with pageNumber, text, imagePrompt.`,
-              temperature: 0.7,
+              prompt: `You are a children's storyteller. Write page ${pageNumber} of ${pages} for a book about ${topic}. 
+              Write 1-3 simple sentences in 'text' and a concise 'imagePrompt'.
+              Return JSON with pageNumber, text, imagePrompt.`,
             });
             const page = pageObject as StoryPage;
-            // Ensure pageNumber matches loop
             const safePage = { ...page, pageNumber } as StoryPage;
             send({ type: "page_text", page: safePage });
-            completedTexts += 1;
-            console.log(`- Page ${pageNumber} Text Ready. Progress: ${completedTexts}/${pages}`);
-            send({ type: "progress", done: completedTexts, total: pages });
-
-            // Image generation in background
-            pendingImages += 1;
-            (async () => {
-              try {
-                const imagePrompt = `${safePage.imagePrompt}. Style: ${style}. Friendly, age-appropriate.`;
-                console.log(`  [Image] Starting Page ${pageNumber}...`);
-                const img = await openai.images.generate({
-                  model: "dall-e-3",
-                  prompt: imagePrompt,
-                  size: "1024x1024",
-                  response_format: "b64_json",
-                });
-                const b64 = img.data?.[0]?.b64_json;
-                const imageUrl = b64 ? `data:image/png;base64,${b64}` : undefined;
-                console.log(`  [Image] Page ${pageNumber} DONE.`);
-                send({ type: "page_image", pageNumber, imageUrl });
-              } catch (e: any) {
-                console.error(`  [Image] Page ${pageNumber} ERROR:`, e?.message || e);
-                send({ type: "page_image_error", pageNumber, error: e?.message || "Image error" });
-              } finally {
-                pendingImages -= 1;
-                if (pendingImages === 0 && completedTexts === pages) {
-                  console.log("4. All Images and Texts finished. Closing stream.");
-                  send({ type: "done" });
-                  controller.close();
-                }
-              }
-            })();
+            send({ type: "progress", done: pageNumber, total: pages });
+            
+            // Placeholder image
+            send({ type: "page_image", pageNumber, imageUrl: `https://placehold.co/1024x1024/sky/white?text=Page+${pageNumber}` });
           }
 
-          // If there are no images pending (unlikely), finish
-          if (pendingImages === 0 && completedTexts === pages) {
+          console.log("4. All pages finished.");
             send({ type: "done" });
             controller.close();
-          }
         } catch (e: any) {
-          console.error("!!! SERVER ERROR:", e?.message || e);
-          send({ type: "error", error: e?.message || "Unknown error" });
+          console.error("!!! GEMINI ERROR:", e?.message || e);
+          send({ type: "error", error: e?.message || "Gemini Error" });
           controller.close();
         }
       },
