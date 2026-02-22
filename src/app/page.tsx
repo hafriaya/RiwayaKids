@@ -1,7 +1,7 @@
 "use client";
 import { Button } from "@/components/ui/button";
-import { BookOpen, Users, Sparkles, Heart, Shuffle, Wand2 } from "lucide-react";
-import { useEffect, useRef, useState, useTransition } from "react";
+import { BookOpen, Sparkles, Heart, Shuffle, Wand2, Image as ImageIcon, Upload } from "lucide-react";
+import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { StoryBook } from "../components/StoryBook";
 import type { GenerateStoryResponse } from "@/lib/types";
@@ -10,15 +10,28 @@ export default function Home() {
   const router = useRouter();
   const [subject, setSubject] = useState("");
   const [isRandom, setIsRandom] = useState(false);
+  const [referenceImage, setReferenceImage] = useState<string | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [story, setStory] = useState<GenerateStoryResponse | null>(null);
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [showReader, setShowReader] = useState(false);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [coverTitle, setCoverTitle] = useState<string | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const pagesRef = useRef<GenerateStoryResponse["pages"]>([]);
 
   async function generateStory() {
     setError(null);
+
+    // Save reference image to sessionStorage if it exists
+    if (referenceImage) {
+      sessionStorage.setItem('faceSwapReferenceImage', referenceImage);
+    } else {
+      sessionStorage.removeItem('faceSwapReferenceImage');
+    }
+
     // Navigate to dedicated reader page with params
     const query = new URLSearchParams({
       subject,
@@ -28,6 +41,22 @@ export default function Home() {
     }).toString();
     router.push(`/read?${query}`);
   }
+
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.size > 5 * 1024 * 1024) { // 5MB limit
+        setError("Image size must be less than 5MB");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setReferenceImage(reader.result as string);
+        setError(null);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-sky-100 to-sky-50">
@@ -66,10 +95,54 @@ export default function Home() {
               </span>
             </h2>
             <p className="text-xl text-blue-600 mb-8 max-w-3xl mx-auto leading-relaxed">
-              Join the magical journey where kids become the heroes of their favorite stories! 
-              Upload your photo and watch yourself appear in beloved children's books, creating 
+              Join the magical journey where kids become the heroes of their favorite stories!
+              Upload your photo and watch yourself appear in beloved children&apos;s books, creating
               personalized adventures that spark imagination and joy.
             </p>
+
+            {/* Image Upload Area */}
+            <div className="max-w-2xl mx-auto mb-6 bg-white/80 backdrop-blur-sm border border-sky-200 rounded-2xl p-6 flex flex-col items-center justify-center">
+              <h3 className="text-xl font-semibold text-blue-800 mb-4 flex items-center">
+                <ImageIcon className="mr-2 h-6 w-6 text-blue-600" />
+                Who is the hero of the story?
+              </h3>
+
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                ref={fileInputRef}
+                onChange={handleImageUpload}
+              />
+
+              {referenceImage ? (
+                <div className="flex flex-col items-center">
+                  <div className="relative w-32 h-32 rounded-full overflow-hidden border-4 border-blue-200 mb-4 shadow-md">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={referenceImage} alt="Hero's face" className="object-cover w-full h-full" />
+                  </div>
+                  <Button
+                    variant="outline"
+                    className="text-red-500 border-red-200 hover:bg-red-50 hover:text-red-700 text-sm"
+                    onClick={() => setReferenceImage(null)}
+                  >
+                    Remove Face
+                  </Button>
+                </div>
+              ) : (
+                <div
+                  className="w-full border-2 border-dashed border-sky-300 rounded-xl p-8 flex flex-col items-center justify-center cursor-pointer hover:bg-sky-50 transition-colors"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <div className="bg-blue-100 p-4 rounded-full mb-3">
+                    <Upload className="h-8 w-8 text-blue-600" />
+                  </div>
+                  <p className="text-blue-800 font-medium mb-1">Click to upload a face photo</p>
+                  <p className="text-blue-500 text-sm">JPG, PNG (Max 5MB)</p>
+                </div>
+              )}
+            </div>
+
             <div className="max-w-2xl mx-auto bg-white/80 backdrop-blur-sm border border-sky-200 rounded-2xl p-4 sm:p-6">
               <div className="flex flex-col sm:flex-row gap-3 items-stretch">
                 <input
@@ -108,7 +181,7 @@ export default function Home() {
               <h3 className="text-3xl font-bold text-center text-blue-800 mb-8">
                 Meet Your Story Characters
               </h3>
-              
+
               {/* Character Grid */}
               <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-6 items-end">
                 {/* Character 1 - Boy with Goat */}
@@ -200,7 +273,7 @@ export default function Home() {
                     <Sparkles className="w-8 h-8 text-white" />
                   </div>
                   <h4 className="text-xl font-bold text-blue-800 mb-2">AI-Powered Magic</h4>
-                  <p className="text-blue-600">Advanced face swapping technology that seamlessly integrates your child's face into story characters.</p>
+                  <p className="text-blue-600">Advanced face swapping technology that seamlessly integrates your child&apos;s face into story characters.</p>
                 </div>
 
                 <div className="text-center p-6 bg-white/60 rounded-2xl backdrop-blur-sm">
@@ -208,7 +281,7 @@ export default function Home() {
                     <BookOpen className="w-8 h-8 text-white" />
                   </div>
                   <h4 className="text-xl font-bold text-blue-800 mb-2">Hundreds of Stories</h4>
-                  <p className="text-blue-600">Choose from our vast library of beloved children's stories and fairy tales.</p>
+                  <p className="text-blue-600">Choose from our vast library of beloved children&apos;s stories and fairy tales.</p>
                 </div>
 
                 <div className="text-center p-6 bg-white/60 rounded-2xl backdrop-blur-sm">
@@ -216,7 +289,7 @@ export default function Home() {
                     <Heart className="w-8 h-8 text-white" />
                   </div>
                   <h4 className="text-xl font-bold text-blue-800 mb-2">Safe & Secure</h4>
-                  <p className="text-blue-600">Your child's photos are processed securely and never stored permanently.</p>
+                  <p className="text-blue-600">Your child&apos;s photos are processed securely and never stored permanently.</p>
                 </div>
               </div>
             </div>
