@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { StoryBook } from "@/components/StoryBook";
-import type { GenerateStoryResponse } from "@/lib/types";
+import type { GenerateStoryResponse, StoryPage } from "@/lib/types";
 
-export default function ReadPage() {
+function ReadPageContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
@@ -22,87 +22,103 @@ export default function ReadPage() {
   const [showReader, setShowReader] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const pagesRef = useRef<GenerateStoryResponse["pages"]>([]);
+  const hasFetched = useRef(false);
 
   useEffect(() => {
-    let cancelled = false;
-    const controller = new AbortController();
+    // Check if there's a stored image just to trigger any side effects early if needed,
+    // though the actual fetch uses it directly from sessionStorage later.
+    const storedImage = sessionStorage.getItem('faceSwapReferenceImage');
+    if (storedImage) {
+      console.debug("Face swap image loaded in session");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (hasFetched.current) return;
+    hasFetched.current = true;
+
     async function run() {
       setIsLoading(true);
       setError(null);
       setCoverTitle(null);
-      pagesRef.current = [];
+      pagesRef.current = Array.from({ length: pagesParam }).map((_, i) => ({
+        pageNumber: i + 1,
+        text: "",
+        imagePrompt: "",
+      }));
       setStory(null);
+
       try {
         const res = await fetch("/api/story/stream", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ subject: random ? undefined : subject, random, pages: pagesParam, ageRange }),
-          signal: controller.signal,
         });
-        if (!res.ok || !res.body) {
-          const j = await res.json().catch(() => ({}));
-          throw new Error((j as any).error || "Failed to start stream");
-        }
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done || cancelled) break;
-          buffer += decoder.decode(value, { stream: true });
-          let idx;
-          while ((idx = buffer.indexOf("\n")) !== -1) {
-            const line = buffer.slice(0, idx).trim();
-            buffer = buffer.slice(idx + 1);
-            if (!line) continue;
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || "Failed to generate story");
+
+        setCoverTitle(data.title);
+        pagesRef.current = data.pages;
+        setStory({ title: data.title, pages: [...data.pages] });
+        setIsLoading(false);
+        setShowReader(true);
+
+        const currentRefImage = sessionStorage.getItem('faceSwapReferenceImage');
+        for (let i = 0; i < data.pages.length; i++) {
+          const page = data.pages[i];
+          setProgress({ done: i, total: data.pages.length });
+
+          if (currentRefImage && page.imagePrompt) {
             try {
-              const evt = JSON.parse(line);
-              if (evt.type === "cover") {
-                setCoverTitle(evt.title);
-                setIsLoading(false);
-              } else if (evt.type === "page_text") {
-                // Add/merge text page
-                const incoming = evt.page;
-                const existingIndex = pagesRef.current.findIndex((p) => p.pageNumber === incoming.pageNumber);
-                if (existingIndex >= 0) {
-                  pagesRef.current[existingIndex] = { ...pagesRef.current[existingIndex], ...incoming };
-                } else {
-                  pagesRef.current = [...pagesRef.current, incoming];
+              const imgRes = await fetch('/api/generate-image', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  imagePrompt: page.imagePrompt,
+                  referenceImage: currentRefImage
+                })
+              });
+
+              if (imgRes.ok) {
+                const imgData = await imgRes.json();
+                if (imgData.imageUrl) {
+                  const idx = pagesRef.current.findIndex(p => p.pageNumber === page.pageNumber);
+                  if (idx >= 0) {
+                    pagesRef.current[idx] = { ...pagesRef.current[idx], imageUrl: imgData.imageUrl };
+                  }
                 }
-                pagesRef.current.sort((a, b) => a.pageNumber - b.pageNumber);
-                setStory({ title: coverTitle || "Story", pages: pagesRef.current.slice() });
-              } else if (evt.type === "page_image") {
-                // Merge image into the correct page
-                const idxPg = pagesRef.current.findIndex((p) => p.pageNumber === evt.pageNumber);
-                if (idxPg >= 0) {
-                  pagesRef.current[idxPg] = { ...pagesRef.current[idxPg], imageUrl: evt.imageUrl };
-                  setStory({ title: coverTitle || "Story", pages: pagesRef.current.slice() });
-                }
-              } else if (evt.type === "progress") {
-                setProgress({ done: evt.done, total: evt.total });
-              } else if (evt.type === "done") {
-                setStory((prev) => (prev ? prev : { title: coverTitle || "Story", pages: pagesRef.current }));
-              } else if (evt.type === "error") {
-                throw new Error(evt.error || "Stream error");
+              } else {
+                console.error("Image generation returned error status:", imgRes.status);
               }
-            } catch (e) {
-              // ignore malformed line
+            } catch (err) {
+              console.error("Face swap failed for page", page.pageNumber, err);
+            }
+          } else if (page.imagePrompt) {
+            const style = "bright, colorful, watercolor children's book style, soft lighting";
+            const cleanStyle = style.replace(/[^a-zA-Z0-9 ]/g, "");
+            const encodedPrompt = encodeURIComponent(`${page.imagePrompt}. Style: ${cleanStyle}. Wholesome children's book illustration.`);
+            const fallbackUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true&seed=${Math.floor(Math.random() * 1000000)}`;
+
+            const idx = pagesRef.current.findIndex(p => p.pageNumber === page.pageNumber);
+            if (idx >= 0) {
+              pagesRef.current[idx] = { ...pagesRef.current[idx], imageUrl: fallbackUrl };
             }
           }
         }
+
+        setStory({ title: data.title, pages: pagesRef.current.slice() });
+        setProgress({ done: data.pages.length, total: data.pages.length });
       } catch (e: unknown) {
-        if (cancelled) return;
+        console.debug("Stream ended or failed:", e);
+        // We only set error here if we actively threw an error, standard completions wouldn't be caught here unless stream crashed
         const msg = e instanceof Error ? e.message : "Something went wrong";
         setError(msg);
         setIsLoading(false);
       }
     }
     run();
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [subject, random, pagesParam, ageRange]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-sky-100 to-sky-50 px-6 py-10">
@@ -153,6 +169,14 @@ export default function ReadPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function ReadPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center bg-sky-50"><p>Loading...</p></div>}>
+      <ReadPageContent />
+    </Suspense>
   );
 }
 
