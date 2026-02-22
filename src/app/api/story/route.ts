@@ -67,8 +67,8 @@ export async function POST(req: Request) {
             ". Respond with 5-10 words and no punctuation except spaces.",
         },
         { role: "user", content: "Give me a random subject." },
-      ] as any);
-      effectiveSubject = String((ai as any).content ?? "A joyful forest picnic with animal friends").trim();
+      ] as Array<{ role: string; content: string }>);
+      effectiveSubject = String((ai as { content?: string }).content ?? "A joyful forest picnic with animal friends").trim();
     }
 
     const storyTopic = `Create a children's story about: ${effectiveSubject}`;
