@@ -43,7 +43,7 @@ export async function POST(req: Request) {
     console.log(`--- New Batch Story Request (${pages} pages) ---`);
     console.log("Subject:", subject);
 
-    const modelName = "gemini-flash-latest";
+    const modelName = "gemini-2.5-flash";
     const model = google(modelName);
 
     const topic = random || !subject
@@ -55,11 +55,11 @@ export async function POST(req: Request) {
     const { object: storyObject } = await generateObject({
       model,
       schema: storySchema,
+      maxRetries: 0,
       prompt: `You are a children's storyteller. Write a ${pages}-page book about ${topic}. 
       For each page, write 1-3 simple sentences in 'text' and a concise descriptive 'imagePrompt'.
       Return a catchy title and an array of pages numbered strictly 1 to ${pages}.`,
     });
-
     console.log("Generation Complete!");
 
     return NextResponse.json(storyObject);

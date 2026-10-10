@@ -3,6 +3,15 @@ import { fal } from "@fal-ai/client";
 
 export async function POST(req: Request) {
     try {
+        console.log("KEY CHECK: ", process.env.FAL_KEY ? "Key is successfully loaded!" : "KEY IS MISSING!");
+
+        // Explicitly initialize fal client with credentials to ensure 100% recognition
+        if (process.env.FAL_KEY) {
+            fal.config({
+                credentials: process.env.FAL_KEY
+            });
+        }
+
         const { imagePrompt, referenceImage } = await req.json();
 
         if (!imagePrompt || !referenceImage) {

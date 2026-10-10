@@ -21,6 +21,7 @@ function ReadPageContent() {
   const [story, setStory] = useState<GenerateStoryResponse | null>(null);
   const [showReader, setShowReader] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [countdownTimer, setCountdownTimer] = useState<number | null>(null);
   const pagesRef = useRef<GenerateStoryResponse["pages"]>([]);
   const hasFetched = useRef(false);
 
@@ -32,6 +33,20 @@ function ReadPageContent() {
       console.debug("Face swap image loaded in session");
     }
   }, []);
+
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (countdownTimer !== null && countdownTimer > 0) {
+      interval = setInterval(() => {
+        setCountdownTimer((prev) => {
+          if (prev && prev > 1) return prev - 1;
+          clearInterval(interval);
+          return 0; // 0 means ready
+        });
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [countdownTimer]);
 
   useEffect(() => {
     if (hasFetched.current) return;
@@ -47,6 +62,7 @@ function ReadPageContent() {
         imagePrompt: "",
       }));
       setStory(null);
+      setCountdownTimer(null);
 
       try {
         const res = await fetch("/api/story/stream", {
@@ -85,6 +101,7 @@ function ReadPageContent() {
                   const idx = pagesRef.current.findIndex(p => p.pageNumber === page.pageNumber);
                   if (idx >= 0) {
                     pagesRef.current[idx] = { ...pagesRef.current[idx], imageUrl: imgData.imageUrl };
+                    setStory({ title: data.title, pages: [...pagesRef.current] });
                   }
                 }
               } else {
@@ -102,6 +119,7 @@ function ReadPageContent() {
             const idx = pagesRef.current.findIndex(p => p.pageNumber === page.pageNumber);
             if (idx >= 0) {
               pagesRef.current[idx] = { ...pagesRef.current[idx], imageUrl: fallbackUrl };
+              setStory({ title: data.title, pages: [...pagesRef.current] });
             }
           }
         }
@@ -110,8 +128,15 @@ function ReadPageContent() {
         setProgress({ done: data.pages.length, total: data.pages.length });
       } catch (e: unknown) {
         console.debug("Stream ended or failed:", e);
-        // We only set error here if we actively threw an error, standard completions wouldn't be caught here unless stream crashed
         const msg = e instanceof Error ? e.message : "Something went wrong";
+
+        // Extract wait time if it's a Gemini 429 quota error
+        const match = msg.match(/Please retry in ([\d.]+)s/);
+        if (match && match[1]) {
+          const seconds = Math.ceil(parseFloat(match[1]));
+          setCountdownTimer(seconds);
+        }
+
         setError(msg);
         setIsLoading(false);
       }
@@ -153,7 +178,25 @@ function ReadPageContent() {
         )}
 
         {error && (
-          <div className="w-full max-w-xl mx-auto mt-6 text-center text-red-600">{error}</div>
+          <div className="w-full max-w-xl mx-auto mt-6 bg-red-50 p-6 rounded-2xl shadow-sm border border-red-200">
+            {countdownTimer !== null ? (
+              countdownTimer > 0 ? (
+                <div className="text-center font-medium">
+                  <div className="text-red-600 mb-2">Google API Rate Limit Reached</div>
+                  <div className="text-red-800 flex flex-col items-center">
+                    <span className="text-4xl font-black mb-1 tabular-nums animate-pulse">{countdownTimer}</span>
+                    <span className="text-sm">seconds remaining before you can generate again</span>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-center font-bold text-green-600 text-lg">
+                  ✅ Ready to generate!
+                </div>
+              )
+            ) : (
+              <div className="text-center text-red-600 font-medium">{error}</div>
+            )}
+          </div>
         )}
 
         {showReader && story && (
