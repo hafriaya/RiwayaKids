@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { generateObject } from "ai";
 import { google } from "@ai-sdk/google";
-import type { StoryPage } from "@/lib/types";
 
 const requestSchema = z.object({
   subject: z.string().optional(),
@@ -10,6 +9,10 @@ const requestSchema = z.object({
   pages: z.number().min(5).max(10).optional(),
   ageRange: z.string().optional(),
   style: z.string().optional(),
+  startPage: z.number().min(1).max(10).optional(),
+  batchSize: z.number().min(1).max(2).optional(),
+  title: z.string().optional(),
+  soFar: z.string().optional(),
 });
 
 const storySchema = z.object({
@@ -38,9 +41,16 @@ export async function POST(req: Request) {
       random = false,
       pages = 5,
       ageRange = "4-7",
+      startPage = 1,
+      batchSize,
+      title,
+      soFar,
     } = parsed.data;
 
-    console.log(`--- New Batch Story Request (${pages} pages) ---`);
+    const count = batchSize ?? pages;
+    const endPage = Math.min(pages, startPage + count - 1);
+
+    console.log(`--- Story pages ${startPage}-${endPage} of ${pages} ---`);
     console.log("Subject:", subject);
 
     const modelName = "gemini-2.5-flash";
@@ -56,9 +66,14 @@ export async function POST(req: Request) {
       model,
       schema: storySchema,
       maxRetries: 0,
-      prompt: `You are a children's storyteller. Write a ${pages}-page book about ${topic}. 
-      For each page, write 1-3 simple sentences in 'text' and a concise descriptive 'imagePrompt'.
-      Return a catchy title and an array of pages numbered strictly 1 to ${pages}.`,
+      prompt: `You are a children's storyteller for ages ${ageRange}.
+      ${topic}
+      The finished book has ${pages} pages. Write only pages ${startPage} to ${endPage}.
+      ${title ? `Keep this title: ${title}.` : "Invent one warm, short title."}
+      ${soFar ? `Story so far: ${soFar}` : "This is the beginning."}
+      Each page needs 1-2 simple, happy sentences in 'text'.
+      imagePrompt must describe a bright, cute, sunny picture-book scene: pastel colors, smiles, soft shapes, daytime. No darkness, monsters, or scary faces.
+      Number the pages strictly from ${startPage} to ${endPage}.`,
     });
     console.log("Generation Complete!");
 

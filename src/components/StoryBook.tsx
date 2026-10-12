@@ -34,7 +34,7 @@ export function StoryBook({ title, pages }: StoryBookProps) {
               ) : (
                 <div className="w-full h-72 bg-sky-50 rounded-md mb-4 border border-sky-100 flex flex-col items-center justify-center relative overflow-hidden">
                   <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/40 to-transparent -translate-x-full animate-[shimmer_2s_infinite]" />
-                  <span className="text-sky-400 font-medium">Waiting for story...</span>
+                  <span className="text-sky-400 font-medium">{p.text ? "Illustration unavailable" : "Waiting for story..."}</span>
                 </div>
               )}
               {p.text ? (

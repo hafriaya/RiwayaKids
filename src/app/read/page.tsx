@@ -4,7 +4,7 @@ import { Suspense, useEffect, useRef, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { StoryBook } from "@/components/StoryBook";
-import type { GenerateStoryResponse, StoryPage } from "@/lib/types";
+import type { GenerateStoryResponse } from "@/lib/types";
 
 function ReadPageContent() {
   const searchParams = useSearchParams();
@@ -64,68 +64,87 @@ function ReadPageContent() {
       setStory(null);
       setCountdownTimer(null);
 
-      try {
-        const res = await fetch("/api/story/stream", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ subject: random ? undefined : subject, random, pages: pagesParam, ageRange }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || "Failed to generate story");
+      const currentRefImage = sessionStorage.getItem("faceSwapReferenceImage");
+      let title = "";
 
-        setCoverTitle(data.title);
-        pagesRef.current = data.pages;
-        setStory({ title: data.title, pages: [...data.pages] });
-        setIsLoading(false);
-        setShowReader(true);
+      const publish = () => {
+        setStory({ title, pages: pagesRef.current.map((page) => ({ ...page })) });
+      };
 
-        const currentRefImage = sessionStorage.getItem('faceSwapReferenceImage');
-        for (let i = 0; i < data.pages.length; i++) {
-          const page = data.pages[i];
-          setProgress({ done: i, total: data.pages.length });
-
-          if (currentRefImage && page.imagePrompt) {
-            try {
-              const imgRes = await fetch('/api/generate-image', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  imagePrompt: page.imagePrompt,
-                  referenceImage: currentRefImage
-                })
-              });
-
-              if (imgRes.ok) {
-                const imgData = await imgRes.json();
-                if (imgData.imageUrl) {
-                  const idx = pagesRef.current.findIndex(p => p.pageNumber === page.pageNumber);
-                  if (idx >= 0) {
-                    pagesRef.current[idx] = { ...pagesRef.current[idx], imageUrl: imgData.imageUrl };
-                    setStory({ title: data.title, pages: [...pagesRef.current] });
-                  }
-                }
-              } else {
-                console.error("Image generation returned error status:", imgRes.status);
-              }
-            } catch (err) {
-              console.error("Face swap failed for page", page.pageNumber, err);
-            }
-          } else if (page.imagePrompt) {
-            const style = "bright, colorful, watercolor children's book style, soft lighting";
-            const cleanStyle = style.replace(/[^a-zA-Z0-9 ]/g, "");
-            const encodedPrompt = encodeURIComponent(`${page.imagePrompt}. Style: ${cleanStyle}. Wholesome children's book illustration.`);
-            const fallbackUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true&seed=${Math.floor(Math.random() * 1000000)}`;
-
-            const idx = pagesRef.current.findIndex(p => p.pageNumber === page.pageNumber);
-            if (idx >= 0) {
-              pagesRef.current[idx] = { ...pagesRef.current[idx], imageUrl: fallbackUrl };
-              setStory({ title: data.title, pages: [...pagesRef.current] });
-            }
+      const drawPage = async (pageNumber: number, imagePrompt: string) => {
+        const idx = pagesRef.current.findIndex((page) => page.pageNumber === pageNumber);
+        if (!imagePrompt || idx < 0) return;
+        try {
+          const imgRes = await fetch("/api/generate-image", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              imagePrompt,
+              referenceImage: currentRefImage || undefined,
+            }),
+          });
+          const imgData = await imgRes.json().catch(() => ({}));
+          if (imgRes.ok && imgData.imageUrl) {
+            pagesRef.current[idx] = { ...pagesRef.current[idx], imageUrl: imgData.imageUrl };
+          } else {
+            console.error("Image generation failed for page", pageNumber, imgRes.status);
+            pagesRef.current[idx] = { ...pagesRef.current[idx], imagePrompt: "" };
           }
+        } catch (err) {
+          console.error("Image generation failed for page", pageNumber, err);
+          pagesRef.current[idx] = { ...pagesRef.current[idx], imagePrompt: "" };
         }
+        publish();
+      };
 
-        setStory({ title: data.title, pages: pagesRef.current.slice() });
-        setProgress({ done: data.pages.length, total: data.pages.length });
+      try {
+        for (let start = 1; start <= pagesParam; start += 2) {
+          const batchSize = Math.min(2, pagesParam - start + 1);
+          const soFar = pagesRef.current
+            .filter((page) => page.text)
+            .map((page) => page.text)
+            .join(" ");
+
+          const res = await fetch("/api/story/stream", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              subject: random ? undefined : subject,
+              random,
+              pages: pagesParam,
+              ageRange,
+              startPage: start,
+              batchSize,
+              title: title || undefined,
+              soFar: soFar || undefined,
+            }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error || "Failed to generate story");
+
+          title = data.title || title;
+          setCoverTitle(title);
+          for (const page of data.pages ?? []) {
+            const idx = page.pageNumber - 1;
+            if (idx < 0 || idx >= pagesRef.current.length) continue;
+            pagesRef.current[idx] = {
+              ...pagesRef.current[idx],
+              pageNumber: page.pageNumber,
+              text: page.text,
+              imagePrompt: page.imagePrompt,
+            };
+          }
+          publish();
+          if (start === 1) {
+            setIsLoading(false);
+            setShowReader(true);
+          }
+
+          const ready = pagesRef.current.slice(start - 1, start - 1 + batchSize);
+          setProgress({ done: start - 1, total: pagesParam });
+          await Promise.all(ready.map((page) => drawPage(page.pageNumber, page.imagePrompt)));
+          setProgress({ done: start - 1 + batchSize, total: pagesParam });
+        }
       } catch (e: unknown) {
         console.debug("Stream ended or failed:", e);
         const msg = e instanceof Error ? e.message : "Something went wrong";
